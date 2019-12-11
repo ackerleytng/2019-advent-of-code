@@ -12,3 +12,6 @@ pom.xml.asc
 .lein-failures
 .nrepl-port
 .cpcache/
+
+# Drawings from quil (11-space-police)
+*.svg
