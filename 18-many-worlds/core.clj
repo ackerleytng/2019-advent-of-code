@@ -113,11 +113,11 @@
   [src {:keys [key-found] :as path}]
   (assoc (dissoc path :key-found) :nodes #{src key-found}))
 
-(defn edges [m]
+(defn edges [m & puzzle-starts]
   (let [key-list (->> (m->seq m)
                       (map first)
                       (filter puzzle-keys))
-        key-list-with-start (conj key-list \@)
+        key-list-with-start (apply conj key-list puzzle-starts)
         coordinates (map #(find-item m %) key-list-with-start)]
     (set (mapcat
           (fn [k] (map (partial path->edge k) (map-from m k)))
@@ -166,7 +166,7 @@
 ########################
 ")
 
-;; (edges (read-map test-map-2))
+;; (edges (read-map test-map-2) \@)
 
 (defn edges->adj-list
   [edges]
@@ -184,14 +184,13 @@
 
 (defn possible-realities
   [graph {:keys [node distance keys-held visited]}]
-  (let [next-keys-held (if (puzzle-keys node) (conj keys-held node) keys-held)]
-    (->> (permitted-edges graph next-keys-held node)
-         (remove #(visited (:nodes %)))
-         (map (fn [{nodes :nodes d :distance}]
-                {:node nodes
-                 :distance (+ distance d)
-                 :keys-held next-keys-held
-                 :visited (conj visited node)})))))
+  (->> (permitted-edges graph keys-held node)
+       (remove #(visited (:nodes %)))
+       (map (fn [{nodes :nodes d :distance}]
+              {:node nodes
+               :distance (+ distance d)
+               :keys-held (if (puzzle-keys nodes) (conj keys-held nodes) keys-held)
+               :visited (conj visited nodes)}))))
 
 (defn trim-realities
   [realities]
@@ -201,17 +200,19 @@
 
 (defn shortest-path-that-collects-all-keys [m]
   (let [num-keys (count-keys m)
-        graph (edges->adj-list (edges m))]
+        graph (edges->adj-list (edges m \@))]
     (loop [realities [{:node \@
                        :distance 0
                        ;; Using a vector to retain order
                        :keys-held []
-                       :visited #{}}]]
+                       :visited #{\@}}]]
       (let [all-next-realities (mapcat (partial possible-realities graph) realities)
             next-realities (trim-realities all-next-realities)]
+        (pprint ["a" all-next-realities])
+        (pprint ["n" next-realities])
         #_(pprint (- (count all-next-realities) (count next-realities)))
         #_(Thread/sleep 300)
-        (if (some #(= num-keys (inc (count (:keys-held %)))) next-realities)
+        (if (some #(= num-keys (count (:keys-held %))) next-realities)
           (apply min (map :distance next-realities))
           (recur next-realities))))))
 
@@ -226,3 +227,128 @@
   )
 
 ;; => 2684
+
+(def test-map-5-should-patch "
+#######
+#a.#Cd#
+##...##
+##.@.##
+##...##
+#cB#Ab#
+#######
+")
+
+(def test-map-6 "
+###############
+#d.ABC.#.....a#
+######$#&######
+###############
+######%#@######
+#b.....#.....c#
+###############
+")
+
+(def test-map-7 "
+#############
+#DcBa.#.GhKl#
+#.###$#&#I###
+#e#d#####j#k#
+###C#%#@###J#
+#fEbA.#.FgHi#
+#############
+")
+
+(def test-map-8 "
+#############
+#g#f.D#..h#l#
+#F###e#E###.#
+#dCba$#&BcIJ#
+#############
+#nK.L%#@G...#
+#M###N#H###.#
+#o#m..#i#jk.#
+#############
+")
+
+(defn m->robot-m
+  [m]
+  (let [[x y] (start-coordinates m)]
+    (-> m
+        (assoc-in [y x] \#)
+        (assoc-in [(inc y) x] \#)
+        (assoc-in [(dec y) x] \#)
+        (assoc-in [y (inc x)] \#)
+        (assoc-in [y (dec x)] \#)
+        (assoc-in [(inc y) (inc x)] \@)
+        (assoc-in [(inc y) (dec x)] \%)
+        (assoc-in [(dec y) (inc x)] \&)
+        (assoc-in [(dec y) (dec x)] \$))))
+
+(def puzzle-starts
+  [\$ \&
+   \% \@])
+
+(defn replace
+  [v before after]
+  (assoc v (.indexOf v before) after))
+
+(defn merge-reality
+  [{:keys [nodes visiteds] :as full}
+   src
+   {:keys [node distance keys-held visited]}]
+  (let [pos (.indexOf nodes src)]
+    {:nodes (assoc nodes pos node)
+     :distance distance
+     :keys-held keys-held
+     :visiteds (assoc visiteds pos visited)}))
+
+(defn possible-realities-2
+  [graph {:keys [nodes visiteds keys-held distance] :as reality}]
+  (let [robot-realities
+        (map (fn [n v]
+               (map (partial merge-reality reality n)
+                    (possible-realities
+                     graph
+                     {:node n
+                      :distance distance
+                      :keys-held keys-held
+                      :visited v})))
+             nodes visiteds)]
+    (apply concat robot-realities)))
+
+(defn trim-realities-2
+  [realities]
+  (->> realities
+       (group-by (juxt (comp set :keys-held) :nodes))
+       (map (fn [[k v]] (apply min-key :distance v)))))
+
+(defn shortest-path-that-collects-all-keys-2 [m]
+  (let [num-keys (count-keys m)
+        graph (edges->adj-list (apply edges m puzzle-starts))]
+    (loop [realities [{:nodes puzzle-starts
+                       :distance 0
+                       ;; Using a vector to retain order
+                       :keys-held []
+                       :visiteds (vec (map (fn [s] #{s}) puzzle-starts))}]]
+      (let [all-next-realities (mapcat (partial possible-realities-2 graph) realities)
+            next-realities (trim-realities-2 all-next-realities)]
+        #_(pprint ["a" all-next-realities])
+        #_(pprint ["n" next-realities])
+        #_(Thread/sleep 300)
+        (if (some #(= num-keys (count (:keys-held %))) next-realities)
+          (apply min (map :distance next-realities))
+          (recur next-realities))))))
+
+;; Part 2
+
+(comment
+
+  (shortest-path-that-collects-all-keys-2 (m->robot-m (read-map test-map-5-should-patch)))
+
+  (shortest-path-that-collects-all-keys-2 (read-map test-map-8))
+
+  (shortest-path-that-collects-all-keys-2 (m->robot-m (read-map (slurp "./18-many-worlds/input.txt"))))
+
+  )
+
+;; => 1886
