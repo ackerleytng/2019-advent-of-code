@@ -50,14 +50,17 @@
              first)]
     [(dec x) (dec y)]))
 
-(defn portal-name
+(defn coordinate-label
+  "Gets the label for coordinates, which is [<set of letters> <coordinates>]
+   We use coordinates to differentiate the two ends of a portal
+   (because warping takes 1 step)"
   [m coordinates]
   (let [c0 (->> (neighbors coordinates)
                 (filter #(portal-chars (whats-at m %)))
                 first)]
-    (set [(whats-at m (map + (map - c0 coordinates) c0)) (whats-at m c0)])))
+    [(set [(whats-at m (map + (map - c0 coordinates) c0)) (whats-at m c0)]) coordinates]))
 
-(defn is-portal?
+(defn is-labeled?
   [m coordinates]
   (and (= \. (whats-at m coordinates))
        (some portal-chars (map (partial whats-at m) (neighbors coordinates)))))
@@ -67,11 +70,11 @@
           (filter #(portal-chars (nth % 2)))
           count) 2))
 
-(defn all-portals [m]
+(defn all-labeled-coordinates [m]
   (->> (m->seq m)
        (map (fn [[x y c]] [x y]))
-       (filter (fn [[x y]] (is-portal? m [x y])))
-       (group-by (fn [[x y]] (portal-name m [x y])))))
+       (filter (fn [[x y]] (is-labeled? m [x y])))
+       (map (fn [[x y]] (coordinate-label m [x y])))))
 
 (defn neighboring-steps
   [m coordinates]
@@ -91,61 +94,62 @@
 
 (defn edge-from-work-item
   [m src {:keys [coordinates distance]}]
-  [src (portal-name m coordinates) distance])
+  [src (coordinate-label m coordinates) distance])
 
 (defn map-from
   [m coordinates]
-  (let [src (portal-name m coordinates)]
+  (let [src (coordinate-label m coordinates)]
     (loop [work-list [{:coordinates coordinates
                        :visited #{coordinates}
                        :distance 0}]
            ;; vector of src, dst, distance
            results []]
-      (let [portals (filter (comp (partial is-portal? m) :coordinates) work-list)
+      (let [portals (filter (comp (partial is-labeled? m) :coordinates) work-list)
             next-results (concat results (map #(edge-from-work-item m src %) portals))]
         (if (seq work-list)
           (recur (mapcat (partial step m) work-list) next-results)
           next-results)))))
 
 (defn graph [m]
-  (let [portals (->> (all-portals m)
-                     vals
-                     (apply concat))]
-    (dissoc (->>  (mapcat (partial map-from m) portals)
-                  (remove #(zero? (nth % 2)))
-                  (reduce (fn [m [src dst distance]] (assoc-in m [src dst] distance)) {}))
-            #{\Z})))
+  (let [labeled-coordinates (->> (all-labeled-coordinates m)
+                                 (map second))
+        labels (map (partial coordinate-label m) labeled-coordinates)
+        portals-grouped (->> (group-by first labels)
+                             (filter (fn [[k v]] (= 2 (count v)))))
+        warp-edges (->> portals-grouped
+                        vals
+                        (mapcat (fn [[a b]] [[a b 1] [b a 1]])))
+        edges (->> (mapcat (partial map-from m) labeled-coordinates)
+                   (remove #(zero? (nth % 2))))]
+    (->> (concat warp-edges edges)
+         (reduce (fn [m [src dst distance]] (assoc-in m [src dst] distance)) {}))))
 
 (defn update-distances
-  [distances node [dst delta]]
-  (let [current-distance (distances node)
-        new-dist (+ current-distance delta)]
+  [distances current-distance [dst delta]]
+  (let [new-dist (+ current-distance delta)]
     (update distances dst (fn [d] (if d (min d new-dist) new-dist)))))
 
-(let [m (read-map test-map-0)
-      g (graph m)]
-  (println g)
-  (loop [work-list [#{\A}]
-         visited #{}
-         distances {#{\A} 0}]
-    (let [[node remainder] ((juxt first rest) work-list)
-          edges (g node)
-          next-distances (reduce
-                          (fn [m edge] (update-distances m node edge))
-                          distances
-                          edges)
-          new-work-items (->> (map first (g node))
-                              (remove visited))
-          next-work-list (apply conj remainder new-work-items)]
-      (println node)
-      (println next-distances)
-      (Thread/sleep 300)
-      (if (seq next-work-list)
-        (recur
-         next-work-list
-         (conj visited node)
-         next-distances)
-        (distances #{\Z})))))
+(defn shortest-distance-from-AA-to-ZZ [m]
+  (let [g (graph m)
+        nodes (set (keys g))
+        start (first (filter #(= #{\A} (first %)) nodes))
+        end (first (filter #(= #{\Z} (first %)) nodes))]
+    (loop [curr start
+           unvisited nodes
+           distances {start 0}]
+      (let [edges (g curr)
+            curr-distance (distances curr)
+            next-distances (reduce
+                            (fn [m edge] (update-distances m curr-distance edge))
+                            distances
+                            edges)
+            next-unvisited (disj unvisited curr)]
+        (if (seq next-unvisited)
+          (let [next-curr (->> (filter #(next-unvisited (first %)) next-distances)
+                               (apply min-key second)
+                               first)]
+            (recur next-curr next-unvisited next-distances))
+          (distances end))))))
 
 (def test-map-0 "
          A
@@ -208,3 +212,9 @@ YN......#               VT..#....QG
            B   J   C
            U   P   P
 ")
+
+;; Part 1
+
+(shortest-distance-from-AA-to-ZZ (read-map (slurp "./20-donut-maze/input.txt")))
+
+;; => 618
