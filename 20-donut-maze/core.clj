@@ -1,6 +1,7 @@
 (ns donut-maze.core
   (:require [clojure.string :as string]
-            [clojure.set :as s]))
+            [clojure.set :as s]
+            [clojure.data.priority-map :refer [priority-map]]))
 
 (defn read-map [s]
   (->> (string/split s #"\n")
@@ -77,9 +78,6 @@
   (->> (neighbors coordinates)
        (filter (fn [c] (= \. (whats-at m c))))))
 
-;; TODO check that order of characters in portal names don't matter
-;;   (there shouldn't be a portal AB and a portal BA)
-
 (defn step
   [m {:keys [coordinates visited distance]}]
   (->> (neighboring-steps m coordinates)
@@ -128,25 +126,23 @@
 (defn shortest-distance-from-AA-to-ZZ [g]
   (let [nodes (set (keys g))
         start (first (filter #(= #{\A} (first %)) nodes))
-        end (first (filter #(= #{\Z} (first %)) nodes))]
-    (loop [curr start
-           unvisited nodes
-           distances {start 0}]
-      (let [edges (g curr)
-            curr-distance (distances curr)
+        end (first (filter #(= #{\Z} (first %)) nodes))
+        pq (priority-map start 0)
+        distances {start 0}]
+    (loop [pq pq
+           distances distances]
+      (let [[curr curr-distance] (peek pq)
+            edges (g curr)
             next-distances (reduce
                             (fn [m edge] (update-distances m curr-distance edge))
-                            distances
-                            edges)
-            next-unvisited (disj unvisited curr)]
-        (if (seq next-unvisited)
-          (if-let [next-curr (some->> next-distances
-                                      (filter #(next-unvisited (first %)))
-                                      seq
-                                      (apply min-key second)
-                                      first)]
-            (recur next-curr next-unvisited next-distances)
-            (distances end))
+                            distances edges)
+            changes (filter (fn [[dst delta]] (not= (next-distances dst) (distances dst))) edges)
+            changes-distances (map
+                               (fn [[dst delta]] [dst (next-distances dst)])
+                               changes)
+            next-pq (into (pop pq) changes-distances)]
+        (if (seq next-pq)
+          (recur next-pq next-distances)
           (distances end))))))
 
 (def test-map-0 "
@@ -212,6 +208,8 @@ YN......#               VT..#....QG
 ")
 
 ;; Part 1
+
+(shortest-distance-from-AA-to-ZZ (graph (read-map test-map-1)))
 
 (shortest-distance-from-AA-to-ZZ (graph (read-map (slurp "./20-donut-maze/input.txt"))))
 
@@ -345,19 +343,21 @@ RE....#.#                           #......RF
 
 ;; Part 2
 
-(let [m (read-map test-map-2)
-      no-recursion-min-distance (shortest-distance-from-AA-to-ZZ (graph m))
-      num-levels (inc (quot no-recursion-min-distance 2))]
-  (shortest-distance-from-AA-to-ZZ (graph-deep m num-levels)))
+(time
+ (let [m (read-map test-map-2)
+       no-recursion-min-distance (shortest-distance-from-AA-to-ZZ (graph m))
+       num-levels (inc (quot no-recursion-min-distance 2))]
+   (shortest-distance-from-AA-to-ZZ (graph-deep m num-levels))))
 
 (comment
 
   ;; Takes pretty long on the actual one
 
-  (let [m (read-map (slurp "./20-donut-maze/input.txt"))
-        no-recursion-min-distance (shortest-distance-from-AA-to-ZZ (graph m))
-        num-levels (inc (quot no-recursion-min-distance 2))]
-    (shortest-distance-from-AA-to-ZZ (graph-deep m num-levels)))
+  (time
+   (let [m (read-map (slurp "./20-donut-maze/input.txt"))
+         no-recursion-min-distance (shortest-distance-from-AA-to-ZZ (graph m))
+         num-levels (inc (quot no-recursion-min-distance 2))]
+     (shortest-distance-from-AA-to-ZZ (graph-deep m num-levels))))
 
   )
 
