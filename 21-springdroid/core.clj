@@ -169,6 +169,11 @@
 
 ;; Part 2
 
+;; Continuing from Part 1,
+;;   once the droid jumps to D, it must jump if E is a hole.
+;; If E is a hole and H is also a hole, the droid will die and should not jump.
+;;   Hence, jump only if either one or both E and H are not holes
+
 (let [script ["NOT T T"
               "AND A T"
               "AND B T"
@@ -176,9 +181,9 @@
               "NOT T T"
               "AND D T"
 
-              "AND H T"
+              "OR E J"
+              "OR H J"
 
-              "NOT J J"
               "AND T J"
               "RUN"]
       output (run-script (springdroid-script script))]
@@ -188,3 +193,5 @@
          println)
     (catch IllegalArgumentException e
       (last output))))
+
+;; => 1141457530
