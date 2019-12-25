@@ -2,4 +2,5 @@
  {org.clojure/data.csv {:mvn/version "0.1.4"}
   org.clojure/math.combinatorics {:mvn/version "0.1.6"}
   org.clojure/data.priority-map {:mvn/version "0.0.10"}
+  org.clojure/core.async {:mvn/version "0.6.532"}
   quil {:mvn/version "3.1.0"}}}
