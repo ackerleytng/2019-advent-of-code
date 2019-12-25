@@ -95,7 +95,7 @@
           (write memory (access-to-write state 2 modes)
                  (* (access state 0 modes) (access state 1 modes)))
           (= 3 instruction)
-          (do #_(println "input" input)
+          (do (and (not= input -1) (println "input" input))
               (write memory (access-to-write state 0 modes) input))
           (#{4 5 6 9 99} instruction)
           memory
@@ -131,8 +131,9 @@
       (cond
         (= 3 (count next-outputs))
         (do
-          (a/>! out-chan next-outputs)
-          (println address "sent" next-outputs)
+          (let [msg (vec next-outputs)]
+            (a/>! out-chan msg)
+            (println address "sent" next-outputs))
           (recur next-state [] nil))
 
         (nil? ip)
@@ -141,7 +142,9 @@
           next-outputs)
 
         :else
-        (recur next-state next-outputs nil)))))
+        (do
+          (a/>! out-chan [200 addr 1234])
+          (recur next-state next-outputs nil))))))
 
 (defn close-all [channels]
   (doseq [{:keys [in-chan out-chan]} (vals channels)]
@@ -153,25 +156,33 @@
 
 (comment
 
-  (let [channels (zipmap (range 50)
-                         (repeatedly (fn [] {:in-chan (a/chan 10) :out-chan (a/chan 10)})))]
+  (def channels
+    (zipmap (range 50)
+            (repeatedly (fn [] {:in-chan (a/chan 100) :out-chan (a/chan 100)}))))
+
+  (do
     ;; Boot all computers
     (doseq [[addr {:keys [in-chan out-chan] :as inout}] channels]
       (intcode-computer inout addr))
 
     ;; Do routing
-    (while true
-      (let [[msg _] (a/<!! (a/merge (mapv :out-chan (vals channels))))
-            [addr x y] msg]
-        (println "msg" msg)
-        (if (= addr 255)
-          (do (close-all channels)
-              (println "=================================>>>" y))
-          (do
-            (println "routed" [x y] "to" addr)
-            (a/onto-chan
-             (get-in channels [addr :in-chan])
-             [x y]
-             false))))))
+    (let [central (a/merge (mapv :out-chan (vals channels)))]
+      (a/go-loop []
+        (let [[addr x y] (a/<! central)]
+          (cond
+            (= addr 255)
+            (do (close-all channels)
+                (println "=================================>>>" y))
+
+            (= addr 200)
+            (recur)
+
+            :else
+            (do
+              (println "routed" [x y] "to" addr)
+              (let [c (get-in channels [addr :in-chan])]
+                (a/>! c x)
+                (a/>! c y))
+              (recur)))))))
 
   )
