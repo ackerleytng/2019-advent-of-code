@@ -95,8 +95,9 @@
           (write memory (access-to-write state 2 modes)
                  (* (access state 0 modes) (access state 1 modes)))
           (= 3 instruction)
-          (do (and (not= input -1) (println "input" input))
-              (write memory (access-to-write state 0 modes) input))
+          (do
+            (and (not= input -1) (println "input" input))
+            (write memory (access-to-write state 0 modes) input))
           (#{4 5 6 9 99} instruction)
           memory
           (= 7 instruction)
@@ -117,23 +118,23 @@
        vec))
 
 (defn intcode-computer
-  [{:keys [in-chan out-chan]} address]
+  [address in-chan out-chan]
   (a/go-loop [state {:memory {:imem (parse-input-code "./23-category-6/input.txt")}}
               outputs []
               addr address]
-    (and (seq outputs) (println "outputs" outputs))
+    #_(and (seq outputs) (println "outputs" outputs))
     (let [[_ instruction] (decode state)
           input (when (= 3 instruction)
                   (or addr
-                      (first (a/alts! [in-chan] :default -1))))
+                      (first (a/alts! [in-chan (a/timeout 250)] :priority true))
+                      -1))
           [{:keys [ip] :as next-state}
            next-outputs] (evaluate state input outputs)]
       (cond
         (= 3 (count next-outputs))
         (do
-          (let [msg (vec next-outputs)]
-            (a/>! out-chan msg)
-            (println address "sent" next-outputs))
+          (a/>! out-chan next-outputs)
+          (println address "sent" next-outputs)
           (recur next-state [] nil))
 
         (nil? ip)
@@ -142,47 +143,33 @@
           next-outputs)
 
         :else
-        (do
-          (a/>! out-chan [200 addr 1234])
-          (recur next-state next-outputs nil))))))
-
-(defn close-all [channels]
-  (doseq [{:keys [in-chan out-chan]} (vals channels)]
-    (a/close! in-chan)
-    (a/close! out-chan)))
-
-(System/setProperty "clojure.core.async.go-checking" "true")
-(System/getProperty "clojure.core.async.go-checking")
+        (recur next-state next-outputs nil)))))
 
 (comment
 
-  (def channels
-    (zipmap (range 50)
-            (repeatedly (fn [] {:in-chan (a/chan 100) :out-chan (a/chan 100)}))))
+  (let [from-router (repeatedly 50 #(a/chan 10))
+        to-router (a/chan 100)]
 
-  (do
     ;; Boot all computers
-    (doseq [[addr {:keys [in-chan out-chan] :as inout}] channels]
-      (intcode-computer inout addr))
+    (doseq [[addr c] (zipmap (range) from-router)]
+      (intcode-computer addr c to-router))
 
     ;; Do routing
-    (let [central (a/merge (mapv :out-chan (vals channels)))]
-      (a/go-loop []
-        (let [[addr x y] (a/<! central)]
-          (cond
-            (= addr 255)
-            (do (close-all channels)
-                (println "=================================>>>" y))
+    (a/<!!
+     (a/go-loop []
+       (let [[addr x y] (a/<! to-router)]
+         (cond
+           (= addr 255)
+           (do #_(doseq [c from-router] (a/close! c))
+               #_(a/close! to-router)
+               y)
 
-            (= addr 200)
-            (recur)
-
-            :else
-            (do
-              (println "routed" [x y] "to" addr)
-              (let [c (get-in channels [addr :in-chan])]
-                (a/>! c x)
-                (a/>! c y))
-              (recur)))))))
+           :else
+           (do
+             (println "routed" [x y] "to" addr)
+             (let [c (nth from-router addr)]
+               (a/>! c x)
+               (a/>! c y))
+             (recur)))))))
 
   )
