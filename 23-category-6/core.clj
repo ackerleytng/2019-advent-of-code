@@ -186,3 +186,53 @@
 (route-until-first-packet-to-255)
 
 ;; => 20160
+
+(defn route-until-NAT-sends-packet-twice []
+  (let [to-router (a/chan 100)
+        intcode-computer-connections
+        (doall
+         (map (partial intcode-computer to-router) (range 50)))]
+    (a/<!!
+     (a/go-loop [NAT-last-packet-received nil
+                 NAT-sent-packets #{}]
+       (let [[[addr x y] ch] (a/alts! [to-router (a/timeout 1000)] :priority true)]
+         (println "lpr" NAT-last-packet-received "sp" NAT-sent-packets)
+         (cond
+           ;; Network was idle for 1s, should route last packet received to 0
+           (nil? addr)
+           (let [[x y] NAT-last-packet-received]
+             (println "trying to route" [x y] "to 0")
+             (if (NAT-sent-packets [x y])
+               (do
+                 (println "shutting down intcode computers")
+                 (doseq [c (map :control-chan intcode-computer-connections)]
+                   (a/>! c :exit))
+                 (doseq [c (map :in-chan intcode-computer-connections)]
+                   (a/close! c))
+                 (a/close! to-router)
+                 y)
+               (do
+                 (let [c (:in-chan (first intcode-computer-connections))]
+                   (println "routing" [x y] "to 0")
+                   (a/>! c x)
+                   (a/>! c y))
+                 (recur NAT-last-packet-received (conj NAT-sent-packets [x y])))))
+
+           ;; Packet was sent to NAT
+           ;;   Just hold on to it
+           (= addr 255)
+           (recur [x y] NAT-sent-packets)
+
+           :else
+           (do
+             (println "routed" [x y] "to" addr)
+             (let [c (:in-chan (nth intcode-computer-connections addr))]
+               (a/>! c x)
+               (a/>! c y))
+             (recur NAT-last-packet-received NAT-sent-packets))))))))
+
+;; Part 2
+
+(route-until-NAT-sends-packet-twice)
+
+;; => 13164
