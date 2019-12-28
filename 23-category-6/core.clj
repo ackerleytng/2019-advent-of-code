@@ -118,58 +118,71 @@
        vec))
 
 (defn intcode-computer
-  [address in-chan out-chan]
-  (a/go-loop [state {:memory {:imem (parse-input-code "./23-category-6/input.txt")}}
-              outputs []
-              addr address]
-    #_(and (seq outputs) (println "outputs" outputs))
-    (let [[_ instruction] (decode state)
-          input (when (= 3 instruction)
-                  (or addr
-                      (first (a/alts! [in-chan (a/timeout 250)] :priority true))
-                      -1))
-          [{:keys [ip] :as next-state}
-           next-outputs] (evaluate state input outputs)]
-      (cond
-        (= 3 (count next-outputs))
-        (do
-          (a/>! out-chan next-outputs)
-          (println address "sent" next-outputs)
-          (recur next-state [] nil))
+  [out-chan address]
+  (let [in-chan (a/chan 10)
+        control-chan (a/chan)
+        go-chan
+        (a/go-loop [state {:memory {:imem (parse-input-code "./23-category-6/input.txt")}}
+                    outputs []
+                    addr address]
+          #_(and (seq outputs) (println "outputs" outputs))
+          (let [[_ ch] (a/alts! [control-chan] :default :continue)]
+            (when (= :default ch)
+              (let [[_ instruction] (decode state)
+                    input (when (= 3 instruction)
+                            (or addr
+                                (first (a/alts! [in-chan (a/timeout 250)] :priority true))
+                                -1))
+                    [{:keys [ip] :as next-state}
+                     next-outputs] (evaluate state input outputs)]
+                (cond
+                  (= 3 (count next-outputs))
+                  (do
+                    (a/>! out-chan next-outputs)
+                    (println address "sent" next-outputs)
+                    (recur next-state [] nil))
 
-        (nil? ip)
-        (do
-          (println "exited")
-          next-outputs)
+                  (nil? ip)
+                  (do
+                    (println "exited")
+                    next-outputs)
 
-        :else
-        (recur next-state next-outputs nil)))))
+                  :else
+                  (recur next-state next-outputs nil))))))]
+    {:in-chan in-chan
+     :control-chan control-chan
+     :out-chan out-chan
+     :address address}))
 
-(comment
-
-  (let [from-router (repeatedly 50 #(a/chan 10))
-        to-router (a/chan 100)]
-
-    ;; Boot all computers
-    (doseq [[addr c] (zipmap (range) from-router)]
-      (intcode-computer addr c to-router))
-
-    ;; Do routing
+(defn route-until-first-packet-to-255 []
+  (let [to-router (a/chan 100)
+        intcode-computer-connections
+        (doall
+         (map (partial intcode-computer to-router) (range 50)))]
     (a/<!!
      (a/go-loop []
        (let [[addr x y] (a/<! to-router)]
          (cond
            (= addr 255)
-           (do #_(doseq [c from-router] (a/close! c))
-               #_(a/close! to-router)
-               y)
+           (do
+             (println "shutting down intcode computers")
+             (doseq [c (map :control-chan intcode-computer-connections)]
+               (a/>! c :exit))
+             (doseq [c (map :in-chan intcode-computer-connections)]
+               (a/close! c))
+             (a/close! to-router)
+             y)
 
            :else
            (do
              (println "routed" [x y] "to" addr)
-             (let [c (nth from-router addr)]
+             (let [c (:in-chan (nth intcode-computer-connections addr))]
                (a/>! c x)
                (a/>! c y))
-             (recur)))))))
+             (recur))))))))
 
-  )
+;; Part 1
+
+(route-until-first-packet-to-255)
+
+;; => 20160
